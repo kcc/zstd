@@ -19,14 +19,16 @@
 /*-*************************************
 *  Dependencies
 ***************************************/
-#include <string.h>         /* memset */
+#include <string.h>             /* memset */
 #include "mem.h"
-#define FSE_STATIC_LINKING_ONLY   /* FSE_encodeSymbol */
+#define FSE_STATIC_LINKING_ONLY /* FSE_encodeSymbol */
 #include "fse.h"
 #define HUF_STATIC_LINKING_ONLY
 #include "huf.h"
-#include "zstd_internal.h"  /* includes zstd.h */
-#include "zstdmt_compress.h"
+#include "zstd_internal.h"      /* also includes zstd.h */
+#ifdef ZSTD_MULTITHREAD
+#  include "zstdmt_compress.h"  /* ZSTDMT_CCtx */
+#endif
 
 
 /*-*************************************
@@ -125,7 +127,9 @@ struct ZSTD_CCtx_s {
 
     /* Multi-threading */
     U32 nbThreads;
+#ifdef ZSTD_MULTITHREAD
     ZSTDMT_CCtx* mtctx;
+#endif
 };
 
 
@@ -175,10 +179,22 @@ size_t ZSTD_freeCCtx(ZSTD_CCtx* cctx)
     cctx->workSpace = NULL;
     ZSTD_freeCDict(cctx->cdictLocal);
     cctx->cdictLocal = NULL;
-    ZSTDMT_freeCCtx(cctx->mtctx);
-    cctx->mtctx = NULL;
+#ifdef ZSTD_MULTITHREAD
+     ZSTDMT_freeCCtx(cctx->mtctx);
+     cctx->mtctx = NULL;
+#endif
     ZSTD_free(cctx, cctx->customMem);
     return 0;   /* reserved as a potential error code in the future */
+}
+
+static size_t ZSTD_sizeof_mtctx(const ZSTD_CCtx* cctx)
+{
+#ifdef ZSTD_MULTITHREAD
+    return ZSTDMT_sizeof_CCtx(cctx->mtctx);
+#else
+    (void) cctx;
+    return 0;
+#endif
 }
 
 size_t ZSTD_sizeof_CCtx(const ZSTD_CCtx* cctx)
@@ -187,11 +203,11 @@ size_t ZSTD_sizeof_CCtx(const ZSTD_CCtx* cctx)
     DEBUGLOG(5, "sizeof(*cctx) : %u", (U32)sizeof(*cctx));
     DEBUGLOG(5, "workSpaceSize : %u", (U32)cctx->workSpaceSize);
     DEBUGLOG(5, "streaming buffers : %u", (U32)(cctx->outBuffSize + cctx->inBuffSize));
-    DEBUGLOG(5, "inner MTCTX : %u", (U32)ZSTDMT_sizeof_CCtx(cctx->mtctx));
+    DEBUGLOG(5, "inner MTCTX : %u", (U32)ZSTD_sizeof_mtctx(cctx));
     return sizeof(*cctx) + cctx->workSpaceSize
            + ZSTD_sizeof_CDict(cctx->cdictLocal)
            + cctx->outBuffSize + cctx->inBuffSize
-           + ZSTDMT_sizeof_CCtx(cctx->mtctx);
+           + ZSTD_sizeof_mtctx(cctx);
 }
 
 size_t ZSTD_sizeof_CStream(const ZSTD_CStream* zcs)
@@ -347,7 +363,7 @@ size_t ZSTD_CCtx_setParameter(ZSTD_CCtx* cctx, ZSTD_cParameter param, unsigned v
         DEBUGLOG(5, " setting nbThreads : %u", value);
 #ifndef ZSTD_MULTITHREAD
         if (value > 1) return ERROR(parameter_unsupported);
-#endif
+#else
         if ((value>1) && (cctx->nbThreads != value)) {
             if (cctx->staticSize)  /* MT not compatible with static alloc */
                 return ERROR(parameter_unsupported);
@@ -356,19 +372,28 @@ size_t ZSTD_CCtx_setParameter(ZSTD_CCtx* cctx, ZSTD_cParameter param, unsigned v
             cctx->mtctx = ZSTDMT_createCCtx_advanced(value, cctx->customMem);
             if (cctx->mtctx == NULL) return ERROR(memory_allocation);
         }
+#endif
         cctx->nbThreads = value;
         return 0;
 
     case ZSTD_p_jobSize:
+#ifndef ZSTD_MULTITHREAD
+        return ERROR(parameter_unsupported);
+#else
         if (cctx->nbThreads <= 1) return ERROR(parameter_unsupported);
         assert(cctx->mtctx != NULL);
         return ZSTDMT_setMTCtxParameter(cctx->mtctx, ZSTDMT_p_sectionSize, value);
+#endif
 
     case ZSTD_p_overlapSizeLog:
+#ifndef ZSTD_MULTITHREAD
+        return ERROR(parameter_unsupported);
+#else
         DEBUGLOG(5, " setting overlap with nbThreads == %u", cctx->nbThreads);
         if (cctx->nbThreads <= 1) return ERROR(parameter_unsupported);
         assert(cctx->mtctx != NULL);
         return ZSTDMT_setMTCtxParameter(cctx->mtctx, ZSTDMT_p_overlapSectionLog, value);
+#endif
 
     default: return ERROR(parameter_unsupported);
     }
@@ -3934,6 +3959,9 @@ size_t ZSTD_compressStream(ZSTD_CStream* zcs, ZSTD_outBuffer* output, ZSTD_inBuf
     return ZSTD_compressStream_generic(zcs, output, input, ZSTD_e_continue);
 }
 
+
+#ifdef ZSTD_MULTITHREAD
+
 /*! ZSTDMT_initCStream_internal() :
  *  Private use only. Init streaming operation.
  *  expects params to be valid.
@@ -3942,7 +3970,7 @@ size_t ZSTD_compressStream(ZSTD_CStream* zcs, ZSTD_outBuffer* output, ZSTD_inBuf
 size_t ZSTDMT_initCStream_internal(ZSTDMT_CCtx* zcs,
                     const void* dict, size_t dictSize, const ZSTD_CDict* cdict,
                     ZSTD_parameters params, unsigned long long pledgedSrcSize);
-
+#endif
 
 size_t ZSTD_compress_generic (ZSTD_CCtx* cctx,
                               ZSTD_outBuffer* output,

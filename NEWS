@@ -1,3 +1,6 @@
+v1.3.2
+build: fix : no-multithread variant compiles without pool.c dependency, reported by Mitchell Blank Jr (@mitchblank) (#819)
+
 v1.3.1
 New license : BSD + GPLv2
 perf: substantially decreased memory usage in Multi-threading mode, thanks to reports by Tino Reichardt (@mcmilk)
